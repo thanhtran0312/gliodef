@@ -131,7 +131,7 @@ def sample_hard_negative(path,positive_indices_pool, negative_indices_pool,balan
         S_40 = np.array(positive_resampled)
         S_40_2d = S_40.reshape(n_pos_stream_total,-1) # flatten into 2d
 
-        # build the tree
+        # build the tree on search space
         # KDTree expects 2d array shape(n_fibers,n_d), hence the reshape above
         T_kdt = KDTree(S_40_2d)
 
