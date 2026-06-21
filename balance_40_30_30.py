@@ -112,7 +112,7 @@ def balance_40_30_30(positive_stream, negative_stream, positive_ratio, negative_
 def sample_hard_negative(path,positive_indices_pool, negative_indices_pool,balance_set,n_pts):
     hard_neg_indices = {}
     path_coords = change_path(path)
-    for b in list(negative_indices_pool.keys()):
+    for b in list(balance_set.keys()):
         n__neg_streamlines = round(balance_set[b][2]/2) # should be for the balance
 
         # query space: negative streams coords both directions of a sequence
@@ -159,7 +159,7 @@ def sample_hard_negative(path,positive_indices_pool, negative_indices_pool,balan
 
 def sample_soft_negative(hard_neg_indices,negative_indices_pool, balance_set):
     soft_neg_indices = {}
-    for b in list(negative_indices_pool.keys()):
+    for b in list(balance_set.keys()):
         n__neg_streamlines = balance_set[b][2]/2
         soft_neg_pool = np.setdiff1d(negative_indices_pool[b], hard_neg_indices[b])
         soft_neg_indices[b] = np.random.choice(soft_neg_pool, size = round(n__neg_streamlines), replace=False)
@@ -171,7 +171,7 @@ def sample_pos_streams(positive_indices_pool,balance_set):
     we sample n (positive_should_be) streams
     """
     positive_indices = {}
-    for b in list(positive_indices_pool.keys()):
+    for b in list(balance_set.keys()):
         n__pos_streamlines = balance_set[b][1]/2
         positive_indices[b] = np.random.choice(positive_indices_pool[b], size = round(n__pos_streamlines), replace=False)
     return positive_indices
