@@ -40,7 +40,7 @@ sub_ids = np.unique(sub)
 tum_ids = np.unique(tum)
 
 
-## create a dict wher"""  """ """e key being tum_id and 
+## create a dict where key being tum_id and 
 # values are another dict with key being path/sub & value being positive streams of that sub
 tums = {tum:{} for tum in tum_ids}
 
