@@ -21,16 +21,19 @@ for inner in stream_indices_per_sub.values():
 paths = list(stream_indices_per_sub.keys())
 
 
-######## tumor severity
+# ######## tumor severity
 positive_streamlines = {path: None for path in paths}
 
-with ProcessPoolExecutor(max_workers=os.cpu_count()) as ex:
+with ProcessPoolExecutor(max_workers=20) as ex:
     futures = {ex.submit(count_streamlines,path,bundle='AF_L'): path for path in paths}
 
     for fut in as_completed(futures):
         path = futures[fut]
         positive, *_ = fut.result() 
         positive_streamlines[path] = int(positive['AF_L'])
+
+with open(os.path.join(output_dir,'pos_streams'),'r') as f:
+    positive_streamlines = json.load(f)
 
 # get tum_ids & sub_ids of warped subjects who passed the threshold
 pattern = re.compile(r"sub-(\d+)_tum-(\d+)")
@@ -43,7 +46,7 @@ sub_ids = np.unique(sub)
 tum_ids = np.unique(tum)
 
 
-## create a dict wher"""  """ """e key being tum_id and 
+## create a dict where key being tum_id and 
 # values are another dict with key being path/sub & value being positive streams of that sub
 tums = {tum:{} for tum in tum_ids}
 
@@ -71,23 +74,26 @@ split_config = {
     'test'  : 0.2
 }
 np.random.seed(2)
+
 # tum
 cv_folds_tum = {'train':[],'test':[]}
 for bin in severity_bins:
-    shuffle_bin = np.random.permutation(bin)
-    number_train_samples = round(split_config['train']*len(shuffle_bin))
-    cv_folds_tum['train'].extend(tum_ids[shuffle_bin[:number_train_samples]])
-    cv_folds_tum['test'].extend(tum_ids[shuffle_bin[number_train_samples:]])
+    shuffled_bin = np.random.permutation(bin)
+    number_train_samples = round(split_config['train']*len(shuffled_bin))
+    cv_folds_tum['train'].extend(tum_ids[shuffled_bin[:number_train_samples]])
+    cv_folds_tum['test'].extend(tum_ids[shuffled_bin[number_train_samples:]])
 
 assert set(cv_folds_tum['train']).isdisjoint(cv_folds_tum['test'])
 
 # sub
 cv_folds_sub = {'train':[],'test':[]}
-shuffled_subs = np.random.permutation(sub_ids)
-split = int(split_config['train']*len(shuffled_subs))
-cv_folds_sub['train'], cv_folds_sub['test'] = np.split(shuffled_subs, [split])
 
-assert set(cv_folds_tum['train']).isdisjoint(cv_folds_tum['test'])
+shuffled_subs = [str(s) for s in np.random.permutation(sub_ids)]
+number_train_samples = int(split_config['train']*len(shuffled_subs))
+cv_folds_sub['train'].extend(shuffled_subs[:number_train_samples])
+cv_folds_sub['test'].extend(shuffled_subs[number_train_samples:])
+
+assert set(cv_folds_sub['train']).isdisjoint(cv_folds_sub['test'])
 
 # or
 # from sklearn.model_selection import train_test_split
