@@ -69,6 +69,6 @@ class DECSeq(torch.nn.Module):
         x1 = self.conv1(pos, eidx)
         x2 = self.conv2(x1, batch)
         out = self.lin1(torch.cat([x1, x2], dim=1))
-        out = global_max_pool(out, batch)
+        out = global_max_pool(out, data.bvec)
         out = self.mlp(out)
         return out
