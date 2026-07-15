@@ -1,4 +1,21 @@
 # train 5 folds
+# to train a neural network, i need
+    # (1) data preparation/loading
+    # (2) neural network construction - verifyber here with its architecture and forward pass
+    # (3) loss function
+    # (4) maybe optimizer?
+
+    # (5) the algorithm - for testing loop
+                        # iterate over a given set of data
+                        # forward the data through the neural network
+                        # compare the network output with the ground truth labels to compute the loss/evaluation metrics
+                        
+                        # for training loop is above +
+                        # perform the backward pass to compute gradients
+                        # call the optimizer to consequently update the weights optimizer.step()
+                        # reset gradients to not accumulate them optimizer.zero_grad()
+
+    # (6) logging
 
 import os
 import json
