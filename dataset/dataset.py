@@ -1,23 +1,9 @@
-# to train a neural network, i need
-    # (1) data preparation/loading
-    # (2) neural network construction - verifyber here with its architecture and forward pass
-    # (3) loss function
-    # (4) maybe optimizer?
+"""bvec	    generated per subject inside Dataset.__getitem__: correctly marks which points belong to which streamline — but only within that one subject, since it's built with no knowledge of any other subject
+   batch	after DataLoader & Batch.from_data_list merges multiple subjects: marks which points belong to which subject (graph) — one distinct value per subject in the batch, e.g. 0 for every point from subject A, 1 for every point from subject B.
+   bvec	    after being correctly offset and copied into .batch: now marks which points belong to which streamline, correctly, across all subjects in the batch simultaneously — no two different subjects' streamlines share the same number anymore."""
 
-    # (5) the algorithm - for testing loop
-                        # iterate over a given set of data
-                        # forward the data through the neural network
-                        # compare the network output with the ground truth labels to compute the loss/evaluation metrics
-                        
-                        # for training loop is above +
-                        # perform the backward pass to compute gradients
-                        # call the optimizer to consequently update the weights optimizer.step()
-                        # reset gradients to not accumulate them optimizer.zero_grad()
-
-    # (6) logging
 
 # libs
-
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
