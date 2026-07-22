@@ -75,16 +75,19 @@ def train_epoch(cfg, loader, model, optimizer, writer, epoch, n_iter):
             criterion = torch.nn.NLLLoss()
             pred =  F.log_softmax(logits, dim=-1)
             loss = criterion(pred, target)
-            total_loss += loss.item()
+            ep_loss += loss.item()
             # running_ep_loss = ep_loss / (i_batch + 1)
             loss.backward()
 
-            if (i_batch + 1) % int(cfg["accumulation_interval"]) == 0:
-                optimizer.step()
-                optimizer.zero_grad()
-            elif not cfg["accumulation_interval"]:
-                optimizer.step()
+            # if (i_batch + 1) % int(cfg["accumulation_interval"]) == 0:
+            #     optimizer.step()
+            #     optimizer.zero_grad()
+            # elif not cfg["accumulation_interval"]:
+            #     optimizer.step()
 
+            optimizer.step()
+            optimizer.zero_grad()
+            
             # print which batch and how long did it take
             if i_batch % 10 == 0:
                 elapsed = time.time() - t0
@@ -94,7 +97,7 @@ def train_epoch(cfg, loader, model, optimizer, writer, epoch, n_iter):
                 print(f'{t1}-{t0}s')
 
             # compute performance
-            if cfg['task'] == 'clasffication':
+            if cfg['task'] == 'classification':
                 pred =  F.log_softmax(logits, dim=-1).view(-1, num_classes)
                 pred_choice = pred.data.max(1)[1].int()
                 update_metrics(metrics, pred_choice, target, task=cfg["task"])
@@ -250,7 +253,7 @@ def train(cfg, bundle_idx, training_data,testing_data):
     writer.close()
 
 if __name__ == '__main__':
-    output_dir = 'output'
+    output_dir = '/home/thanh/output'
     with open(os.path.join(output_dir,'cv_folds_tum.json'),'r') as f:
         cv_folds_tum = json.load(f)
     with open(os.path.join(output_dir,'cv_folds_sub.json'),'r') as f:
