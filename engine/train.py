@@ -15,20 +15,21 @@
                         # reset gradients to not accumulate them optimizer.zero_grad()
 
     # (6) logging
-import os
 import sys
 import json
 import torch
 import time
 import numpy as np
-import tomli as tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - for Python < 3.11
+    import tomli as tomllib
 from pathlib import Path
 from torch_geometric.loader import DataLoader as gDataLoader
 import torch.nn.functional as F
 
 
-project_parent = Path.cwd().parents[1]   # from training_script/data -> gliodef_script
-sys.path.insert(0, str(project_parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # -> root/src
 from training_script.data.dataset import GlioDefDataset
 from training_script.utils.transforms import RndSampling
 from training_script.models.verifyber import DECSeq
@@ -253,17 +254,24 @@ def train(cfg, bundle_idx, training_data,testing_data):
     writer.close()
 
 if __name__ == '__main__':
-    output_dir = '/home/thanh/output'
-    with open(os.path.join(output_dir,'cv_folds_tum.json'),'r') as f:
-        cv_folds_tum = json.load(f)
-    with open(os.path.join(output_dir,'cv_folds_sub.json'),'r') as f:
-        cv_folds_sub = json.load(f)
-    with open(os.path.join(output_dir,'bundle_idx.json'),'r') as f:
+    script_dir = Path('__file__').resolve().parent
+    
+    project_root = script_dir.parents[2]      # root/
+    src_dir      = script_dir.parents[1]      # root/src/
+    data_dir   = project_root / "data"
+    output_dir = src_dir / "output"
+    config_file = script_dir / "config.toml"   # same dir as train.py
+
+    
+    with (output_dir / "allbundles_idx.json").open("r") as f:
         bundle_idx = json.load(f)
-    config_file = Path('config.toml')
-    with config_file.open('rb') as fid:
-        cfg = tomllib.load(fid)
-        cfg = cfg["DEFAULT"]
+    with (output_dir / "cv_folds_tum.json").open("r") as f:
+        cv_folds_tum = json.load(f)
+    with (output_dir / "cv_folds_sub.json").open("r") as f:
+        cv_folds_sub = json.load(f)
+
+    with config_file.open("rb") as fid:
+        cfg = tomllib.load(fid)["DEFAULT"]
 
     subjects_pool = [bundle_idx['AF_L'][j]['path'] for j in range(len(bundle_idx['AF_L']))]
     for i in range(cfg["folds"]):
@@ -276,13 +284,13 @@ if __name__ == '__main__':
         training_tum = [t for j, fold in enumerate(cv_folds_tum) if i != j for t in fold]   
         for sub in training_sub:
             for tum in training_tum:
-                path = f'/nilab-nexus/datasets/GLIODEF/sub-{sub}/tractography/sub-{sub}_tum-{tum}_bundle.csv'
+                path = data_dir / f"sub-{sub}" / "tractography" / f"sub-{sub}_tum-{tum}_bundle.csv"
                 if path in subjects_pool:
                     training_data.append(path)
 
         for sub in testing_sub:
             for tum in testing_tum:
-                path = f'/nilab-nexus/datasets/GLIODEF/sub-{sub}/tractography/sub-{sub}_tum-{tum}_bundle.csv'
+                path = data_dir / f"sub-{sub}" / "tractography" / f"sub-{sub}_tum-{tum}_bundle.csv"
                 if path in subjects_pool:
                     testing_data.append(path)
     train(cfg, bundle_idx, training_data,testing_data)
