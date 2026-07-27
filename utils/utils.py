@@ -8,7 +8,7 @@ from dipy.tracking.streamline import select_random_set_of_streamlines, set_numbe
 
 def digis_path(bundle_idx):
     old_root = '/nilab-nexus/datasets/GLIODEF'
-    new_root = '/app/data'   # wherever your data actually lives now
+    new_root = '/app/data'   
     for j in range(len(bundle_idx['AF_L'])):
         bundle_idx['AF_L'][j]['path'] = bundle_idx['AF_L'][j]['path'].replace(old_root, new_root)
     return bundle_idx
