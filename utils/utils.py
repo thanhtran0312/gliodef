@@ -22,7 +22,6 @@ def resample_streamlines(streamlines, n_pts=16):
     resampled = []
     for sl in streamlines:
         resampled.append(set_number_of_points(sl, n_pts))
-
     return resampled
 
 def parse_lengths(buffer, lengths, point_size, n_properties):
@@ -61,7 +60,6 @@ def parse_streamlines(buffer,
                 s = s[::-1]
 
         streamlines.append(s)
-
     return streamlines
 
 def load_streamlines(trk_fn,
