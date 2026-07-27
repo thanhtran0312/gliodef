@@ -1,4 +1,5 @@
-## from the project folder (outside all the folders in this repo), run  1012  nohup python -u -m training_script.preprocessing.balance_40_30_30 > output.log 2>&1 &
+## from the project folder (outside all the folders in this repo), run
+## nohup python -u -m training_script.preprocessing.balance_40_30_30 > output.log 2>&1 &
 
 import json
 import os
