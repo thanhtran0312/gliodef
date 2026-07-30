@@ -1,8 +1,7 @@
 ## from the project folder (outside all the folders in this repo), run
 ## nohup python -u -m training_script.preprocessing.balance_40_30_30 > output.log 2>&1 &
-
 import json
-import os
+import re
 import time
 import pandas as pd
 import numpy as np
@@ -10,24 +9,6 @@ from pathlib import Path
 import faiss
 from training_script.utils.utils import load_streamlines, resample_streamlines, change_path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-
-# input: bundle_idx where its a dict with keys() being bundles
-# items() being path to subjects whose have positive streamlines more than 100 for the bundle
-
-# (1) count how many positive streamlines there are in each bundle of each subject
-# (2) compute the ratio of positives vs total for that subject for that bundle
-
-# (3) if it's 40% ok
-# (4) if it's not 40% -> rescale
-# (5) does each subject's 40-30-30 pass 1500?
-    # what do i want for the output?
-    # each subject has a file with indices of 40-30-30
-# (6) sample hard vs soft negatives
-    # sample every line into 40 points
-    # then for one bundle, we have eg 500 pos & 2000 neg
-    # for every negative streamline, we want to know the closest bundle
-
-# (7) output: json file for 3 lists of indices into warped tractogram for positive/negative streams
 
 
 def count_streamlines(path, bundles):
@@ -124,7 +105,7 @@ def sample_hard_negative(path,positive_indices_pool, negative_indices_pool,balan
     hard_neg_indices = {}
     path_coords = change_path(path)
     for b in list(balance_set.keys()):
-        n__neg_streamlines = round(balance_set[b][2]/2) # should be for the balance
+        n__neg_streamlines = int(np.floor(balance_set[b][2]/2)) # should be for the balance
 
         # load tractogram
         n_pos = len(positive_indices_pool[b])
@@ -180,11 +161,13 @@ def sample_hard_negative(path,positive_indices_pool, negative_indices_pool,balan
         # one is the index of the match 
 
 
-def sample_soft_negative(hard_neg_indices,negative_indices_pool, balance_set):
+def sample_soft_negative(path,hard_neg_indices,negative_indices_pool, balance_set):
     soft_neg_indices = {}
     for b in list(balance_set.keys()):
-        n__neg_streamlines = balance_set[b][2]/2
+        n__neg_streamlines = balance_set[b][2] - len(hard_neg_indices[b])
         soft_neg_pool = np.setdiff1d(negative_indices_pool[b], hard_neg_indices[b])
+        if len(soft_neg_pool) < n__neg_streamlines:
+            raise ValueError(f'{path} neg-case')
         soft_neg_indices[b] = np.random.choice(soft_neg_pool, size = round(n__neg_streamlines), replace=False)
     return soft_neg_indices
 
@@ -204,7 +187,7 @@ def process(path):
     positive_stream, negative_stream, positive_ratio, negative_ratio, positive_indices_pool, negative_indices_pool = compute_ratio(count_streamlines,path,bundles)
     balance_set = balance_40_30_30(positive_stream, negative_stream, positive_ratio, negative_ratio)
     hard_neg_indices = sample_hard_negative(path,positive_indices_pool, negative_indices_pool,balance_set,n_pts=40)
-    soft_neg_indices = sample_soft_negative(hard_neg_indices,negative_indices_pool, balance_set)
+    soft_neg_indices = sample_soft_negative(path, hard_neg_indices,negative_indices_pool, balance_set)
     positive_indices = sample_pos_streams(positive_indices_pool,balance_set)
     result = {}
     for b in list(hard_neg_indices.keys()):
@@ -215,45 +198,45 @@ def process(path):
     print(f"query: {time.time()-t0:.2f}s")
     return result
 
-if __name__ == "__main__":
-    script_dir = Path(__file__).resolve().parent
+if __name__ == '__main__':
+    script_dir = Path('__file__').resolve().parent
     src_dir = script_dir.parents[1]
-    output_dir = src_dir / 'output'
+    output_dir = src_dir / 'thanh'/'gliodef_script'/'output'
 
     data_dir = '/nilab-nexus/datasets/GLIODEF'
 
     with (output_dir / 'subjects_survived_100str_thresh.json').open("r") as file:
-        data = json.load(file)
+            data = json.load(file)
 
     balance_config = {
-        'positive': 0.4,
-        'hard_negative': 0.3,
-        'soft_negative': 0.3
-    }
+            'positive': 0.4,
+            'hard_negative': 0.3,
+            'soft_negative': 0.3
+        }
 
-    # (1) for each bundle, each subject, i calculate % of positive streamlines
     bundles = list(data.keys())
     subjects = np.unique([path for paths in data.values() for path in paths])
+
+
+    pattern = re.compile(r"sub-1174")
+    subjects = [p for p in subjects if pattern.search(p)]
+
     bundle_idx = {b: [] for b in bundles}
 
-    with ProcessPoolExecutor(max_workers=10) as ex:
-        futures = {ex.submit(process,path): path for path in subjects}
+    with ProcessPoolExecutor(max_workers=2) as ex:
+            futures = {ex.submit(process,path): path for path in subjects}
 
-        for fut in as_completed(futures):
-            each_sub = fut.result()
-            relevant_bundles = list(each_sub.keys())
-            for b in relevant_bundles:
-                if each_sub[b]['hard_neg_indices'] is None:
-                    print(f"Skipped {each_sub[b]['path']} (under 1500 threshold)")
-                    continue
-                bundle_idx[b].append({
-                            'path': each_sub[b]['path'],
-                            'hard_neg_indices': each_sub[b]['hard_neg_indices'].tolist(),
-                            'soft_neg_indices': each_sub[b]['soft_neg_indices'].tolist(),
-                            'positive_indices': each_sub[b]['positive_indices'].tolist()
-                        })            
-                print(f"Processed {each_sub[b]['path']}")
-
-    with open("allbundles_idx.json", "w") as f:
-        json.dump(bundle_idx,f,indent=2)
-
+            for fut in as_completed(futures):
+                each_sub = fut.result()
+                relevant_bundles = list(each_sub.keys())
+                for b in relevant_bundles:
+                    if each_sub[b]['hard_neg_indices'] is None:
+                        print(f"Skipped {each_sub[b]['path']} (under 1500 threshold)")
+                        continue
+                    bundle_idx[b].append({
+                                'path': each_sub[b]['path'],
+                                'hard_neg_indices': each_sub[b]['hard_neg_indices'].tolist(),
+                                'soft_neg_indices': each_sub[b]['soft_neg_indices'].tolist(),
+                                'positive_indices': each_sub[b]['positive_indices'].tolist()
+                            })            
+                    print(f"Processed {each_sub[b]['path']}")
