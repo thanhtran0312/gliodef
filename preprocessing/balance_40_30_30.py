@@ -101,6 +101,11 @@ def faiss_nn(S, Q):
     return distances.squeeze(), indices.squeeze()
 
 def sample_hard_negative(path,positive_indices_pool, negative_indices_pool,balance_set,n_pts):
+    """ build search space over positive samples, query space over negative samples.
+    nearest-neighbor search (this FAISS IndexFlatL2) searches for samples in the query space 
+    that's of closest distance to samples in the search space => search for negative streams 
+    that are of closest distance to positive streams, we called hard negative samples."""
+    
     print('start sampling hard neg')
     hard_neg_indices = {}
     path_coords = change_path(path)
