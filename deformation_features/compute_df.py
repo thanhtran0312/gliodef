@@ -66,6 +66,8 @@ def deformation_feature_1(bundle_idx, bundle_centroid_tractogram_path):
     # step 3: for each internal point of each streamline,
               i compute euclidean distance of on that point to all the points on the skeleton
     # step 4: i take the min
+    step 3,4 is done by kdtree; to double check:
+            assert distS_nn_streamlinePoints_skeleton[j] == Euclidian_Distance_3d(nn_in_skeleton, streamline_np[j])
     """
     bundle_skeleton = spacing_tovox(bundle_centroid_tractogram_path,target_spacing_mm=1) # return Array Sequence len of 1
     search_space = np.array(bundle_skeleton[0])
