@@ -50,8 +50,9 @@ def class_query(sub,kdt_skeleton,label):
         ## split back per streamline
         splits = np.cumsum(length)[:-1]
         dist_per_streamline = np.split(dist, splits)
-        return dist_per_streamline
-
+        dist_per_streamline_internal_points = [d[1:-1] for d in dist_per_streamline]
+        return dist_per_streamline_internal_points
+    
 def deformation_feature_1(bundle_idx, bundle_centroid_tractogram_path):
     """
     this function runs for one bundle at a time.
