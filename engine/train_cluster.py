@@ -1,5 +1,20 @@
-# the only difference from train.py is i added a function to change path to the cluster, because bundle_idx saved absolute path.
+# to train a neural network, i need
+    # (1) data preparation/loading
+    # (2) neural network construction - verifyber here with its architecture and forward pass
+    # (3) loss function
+    # (4) maybe optimizer?
 
+    # (5) the algorithm - for testing loop
+                        # iterate over a given set of data
+                        # forward the data through the neural network
+                        # compare the network output with the ground truth labels to compute the loss/evaluation metrics
+                        
+                        # for training loop is above +
+                        # perform the backward pass to compute gradients
+                        # call the optimizer to consequently update the weights optimizer.step()
+                        # reset gradients to not accumulate them optimizer.zero_grad()
+
+    # (6) logging
 import sys
 import json
 import torch
@@ -46,24 +61,31 @@ def train_epoch(cfg, loader, model, optimizer, writer, epoch, n_iter):
         ep_loss = 0.0
         ep_loss_dict = initialize_loss_dict(cfg)
         metrics = initialize_metrics()
+        end = time.time()
         t0 = time.time()
         for i_batch, sample_batched in enumerate(loader):
+            load_time = time.time() - end
             data = sample_batched['points']
             target = data.y   # ground truth
-            data,target = data.to("cuda"), target.to("cuda")
-
+            t = time.time()
+            data,target = data.to("cuda",non_blocking=True), target.to("cuda",non_blocking=True)
+            torch.cuda.synchronize()
+            transfer_time = time.time() - t
             if not cfg["accumulation_interval"] or i_batch == 0:
                 optimizer.zero_grad()
             
             # forward
+            t = time.time()
             logits = model(data)
-
+            torch.cuda.synchronize()
+            forward_time = time.time() - t
             # loss
             criterion = torch.nn.NLLLoss()
             pred =  F.log_softmax(logits, dim=-1)
             loss = criterion(pred, target)
             ep_loss += loss.item()
             # running_ep_loss = ep_loss / (i_batch + 1)
+            t = time.time()
             loss.backward()
 
             # if (i_batch + 1) % int(cfg["accumulation_interval"]) == 0:
@@ -74,7 +96,17 @@ def train_epoch(cfg, loader, model, optimizer, writer, epoch, n_iter):
 
             optimizer.step()
             optimizer.zero_grad()
-            
+            torch.cuda.synchronize()
+            backward_time = time.time() - t
+            print(
+                f"batch {i_batch}: "
+                f"load={load_time:.2f}s, "
+                f"transfer={transfer_time:.2f}s, "
+                f"forward={forward_time:.2f}s, "
+                f"backward={backward_time:.2f}s, "
+                f"points={data.x.shape[0]}, "
+                f"edges={data.edge_index.shape[1]}")
+            end = time.time()	
             # print which batch and how long did it take
             if i_batch % 10 == 0:
                 elapsed = time.time() - t0
@@ -155,9 +187,12 @@ def validate_epoch(cfg, loader, model, writer, epoch, best_epoch, best_score):
         log_str += "loss: %.4f " % loss.item()
         log_str += get_metrics_inline(metrics_val, type="last")
         print(log_str)
+    val_loss = ep_loss/len(loader)
+    writer.add_scalar("val/epoch_loss",val_loss,epoch) 
     log_avg_metrics(writer, metrics_val, "val", epoch)
     epoch_score = torch.tensor(metrics_val[ref_metrics]).mean().item()
     print("VALIDATION AVG: %s" % get_metrics_inline(metrics_val, "avg"))
+    print("VALIDATION LOSS:", val_loss)
     print("\n\n")
 
     if ref_metrics == "acc" and epoch_score > best_score:
@@ -188,8 +223,8 @@ def train(cfg, bundle_idx, training_data,testing_data):
                               with_gt=True, permute=True, permute_type='flip')
 
 
-    train_loader = gDataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True)
-    val_loader = gDataLoader(val_dataset, batch_size=cfg['batch_size'], shuffle=False)
+    train_loader = gDataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True,pin_memory=True,num_workers=8)
+    val_loader = gDataLoader(val_dataset, batch_size=cfg['batch_size'], shuffle=False,pin_memory=True,num_workers=8)
 
     writer = create_tb_logger(cfg)
     dump_code(cfg, writer.log_dir)
@@ -240,7 +275,7 @@ def train(cfg, bundle_idx, training_data,testing_data):
     writer.close()
 
 if __name__ == '__main__':
-    script_dir = Path('__file__').resolve().parent
+    script_dir = Path(__file__).resolve().parent
     
     project_root = script_dir.parents[2]      # root/
     src_dir      = script_dir.parents[1]      # root/src/
@@ -258,7 +293,7 @@ if __name__ == '__main__':
 
     with config_file.open("rb") as fid:
         cfg = tomllib.load(fid)["DEFAULT"]
-
+        
     bundle_idx = digis_path(bundle_idx)
     subjects_pool = [(bundle_idx['AF_L'][j]['path']) for j in range(len(bundle_idx['AF_L']))]    
     for i in range(cfg["folds"]):
