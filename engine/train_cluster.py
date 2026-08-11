@@ -15,7 +15,9 @@
                         # reset gradients to not accumulate them optimizer.zero_grad()
 
     # (6) logging
+
 import sys
+import argparse
 import json
 import torch
 import time
@@ -59,7 +61,7 @@ def train_epoch(cfg, loader, model, optimizer, writer, epoch, n_iter):
         num_classes = int(cfg["n_classes"])
         num_batch = cfg["num_batch"]
         ep_loss = 0.0
-        ep_loss_dict = initialize_loss_dict(cfg)
+        # ep_loss_dict = initialize_loss_dict(cfg)
         metrics = initialize_metrics()
         end = time.time()
         t0 = time.time()
@@ -145,7 +147,7 @@ def train_epoch(cfg, loader, model, optimizer, writer, epoch, n_iter):
             n_iter += 1
         ep_loss = ep_loss / (i_batch + 1)
         writer.add_scalar("train/epoch_loss", ep_loss, epoch)
-        log_losses(ep_loss_dict, writer, epoch, i_batch + 1)
+        # log_losses(ep_loss_dict, writer, epoch, i_batch + 1)
         log_avg_metrics(writer, metrics, "train", epoch)
         return ep_loss, n_iter
 
@@ -168,22 +170,24 @@ def validate_epoch(cfg, loader, model, writer, epoch, best_epoch, best_score):
             pred = F.log_softmax(logits,dim=-1)
             loss = criterion(pred,target)
             ep_loss += loss.item()
-            
-            ref_metrics = "acc"
-            pred = F.log_softmax(logits, dim=-1).view(-1, num_classes)
-            pred_choice = pred.data.max(1)[1].int()
-            update_metrics(metrics_val, pred_choice, target, task=cfg["task"])
-            print(
-                    "val min / max class pred %d / %d"
-                    % (pred_choice.min().item(), pred_choice.max().item())
-                )
-            print("# class pred ", len(torch.unique(pred_choice)))
-                # writer.add_scalar('val/loss', ep_loss / i, epoch)
-        else:
-            ref_metrics = "mse"
-            update_metrics(
-                    metrics_val, logits.float(), target.float(), task=cfg["task"]
-                )
+
+            if cfg['task'] == 'classification':
+
+                ref_metrics = "acc"
+                pred = F.log_softmax(logits, dim=-1).view(-1, num_classes)
+                pred_choice = pred.data.max(1)[1].int()
+                update_metrics(metrics_val, pred_choice, target, task=cfg["task"])
+                print(
+                        "val min / max class pred %d / %d"
+                        % (pred_choice.min().item(), pred_choice.max().item())
+                    )
+                print("# class pred ", len(torch.unique(pred_choice)))
+                    # writer.add_scalar('val/loss', ep_loss / i, epoch)
+            else:
+                ref_metrics = "mse"
+                update_metrics(
+                        metrics_val, logits.float(), target.float(), task=cfg["task"]
+                    )
         log_str += "loss: %.4f " % loss.item()
         log_str += get_metrics_inline(metrics_val, type="last")
         print(log_str)
@@ -275,16 +279,19 @@ def train(cfg, bundle_idx, training_data,testing_data):
     writer.close()
 
 if __name__ == '__main__':
+    # paths
     script_dir = Path(__file__).resolve().parent
-    
     project_root = script_dir.parents[2]      # root/
     src_dir      = script_dir.parents[1]      # root/src/
     data_dir   = project_root / "data"
     output_dir = src_dir / "output"
     config_file = script_dir / "config.toml"   # same dir as train.py
+    #args
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bundle", required=True, help="e.g. AF_L")
+    args = parser.parse_args() 
 
-    
-    with (output_dir / "bundle_idx.json").open("r") as f:
+    with (output_dir / f"bundle_idx_{args.bundle}.json").open("r") as f:
         bundle_idx = json.load(f)
     with (output_dir / "cv_folds_tum.json").open("r") as f:
         cv_folds_tum = json.load(f)
@@ -293,9 +300,12 @@ if __name__ == '__main__':
 
     with config_file.open("rb") as fid:
         cfg = tomllib.load(fid)["DEFAULT"]
-        
+
+    cfg["bundle"] = args.bundle
+    cfg["experiment_name"] = f"{cfg['experiment_name']}_{args.bundle}"
+
     bundle_idx = digis_path(bundle_idx)
-    subjects_pool = [(bundle_idx['AF_L'][j]['path']) for j in range(len(bundle_idx['AF_L']))]    
+    subjects_pool = [(bundle_idx[args.bundle ][j]['path']) for j in range(len(bundle_idx[args.bundle ]))]    
     for i in range(cfg["folds"]):
         testing_data = []
         testing_tum = cv_folds_tum[i]
@@ -315,4 +325,4 @@ if __name__ == '__main__':
                 path = str(data_dir / f"sub-{sub}" / "tractography" / f"sub-{sub}_tum-{tum}_bundle.csv")
                 if path in subjects_pool:
                     testing_data.append(path)
-    train(cfg, bundle_idx, training_data,testing_data)
+        train(cfg, bundle_idx, training_data,testing_data)
