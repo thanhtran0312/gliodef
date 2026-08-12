@@ -66,8 +66,7 @@ def deformation_feature_1(sub_tum,tum_id,sub_id):
     this function runs for one subject relative to one bundle at a time.
 
     args: 
-            streamlines of the bundle
-            centroid tractogram
+            streamlines of the subject
     output: 
 
     # step 1: get the skeleton of the bundle - 1mm spaced
