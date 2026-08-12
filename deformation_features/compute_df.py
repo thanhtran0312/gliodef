@@ -181,6 +181,8 @@ if __name__ == '__main__':
                 indices = subjects[path]['hard_neg_indices']+subjects[path]['soft_neg_indices']+subjects[path]['positive_indices']
                 len_hard = len(subjects[path]['hard_neg_indices'])
                 len_soft = len(subjects[path]['soft_neg_indices'])
+                len_pos = len(subjects[path]['positive_indices'])
+
                 streamlines = load_streamlines(change_to_trk(path), idxs = indices, container = 'array')
                 sub_tum = {path:
                     {'hard_neg_streams': streamlines[:len_hard],
