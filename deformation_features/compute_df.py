@@ -91,10 +91,8 @@ def ray_intersections_all_streamlines(
 
 def spacing(path, streamlines, target_spacing_mm=1):
     """ for all streamlines from indices given of one tractogram, this function do 2 things
-    (1) enforce equal space spacing 
-    (2) convert to voxel space 
-    
     args: streamlines' coords, spacing value
+    algos: enforce equal space spacing 
     """
     resampled_streamlines = []
     for sl in streamlines:
@@ -123,10 +121,8 @@ def class_query(all_streamlines,kdt_skeleton):
 def get_center_of_mass(path_nii):
     img = nib.load(path_nii)
     mask = img.get_fdata() > 0
-
     coords = np.argwhere(mask) # gives all voxel coords that belong to the tumor
     center_vox = coords.mean(axis=0) # take the mean coord across all tumor voxels
-
     center_rasmm = nib.affines.apply_affine(img.affine, center_vox)
     return center_rasmm
 
@@ -134,10 +130,8 @@ def get_border_points(path_nii):
     img = nib.load(path_nii)
     mask = img.get_fdata() > 0    # the whole mask - 3d boolean array - 
     # cell value is true/false whether voxel at that index belongs to the lesion or not
-
     eroded = binary_erosion(mask) # the interior -  3d boolean array
     border = mask & ~eroded       # = the whole mask - the interior - 3d boolean array
-
     border_points = np.argwhere(border) # n points x 3d coords
     border_rasmm = nib.affines.apply_affine(img.affine, border_points)
     return border_rasmm
@@ -145,7 +139,6 @@ def get_border_points(path_nii):
 def deformation_feature_1(bundle,all_streamlines):
     """
     this function runs for one subject relative to one bundle at a time.
-
     args: 
             streamlines of the bundle
             centroid tractogram
