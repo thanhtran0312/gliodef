@@ -2,6 +2,7 @@
 to run on the cluster, each job is a combination of sub_id x tum_id x bundle
 
 """
+
 import numpy as np
 import re
 import json
@@ -18,7 +19,7 @@ from dipy.tracking.streamline import set_number_of_points
 from dipy.tracking.streamlinespeed import length
 from dipy.io.stateful_tractogram import StatefulTractogram, Space
 from nibabel.streamlines.array_sequence import ArraySequence
-from training_script.utils.utils import load_streamlines, change_to_trk
+from training_script.utils.utils import load_streamlines, change_to_trk, irbio_path
 
 
 def ray_intersections_all_streamlines(
@@ -117,7 +118,7 @@ def spacing(path, streamlines, target_spacing_mm=1):
         n_points =  int(round(total_len_mm / target_spacing_mm)) + 1
         resampled_streamlines.append(set_number_of_points(sl, n_points))
     new_streamlines = ArraySequence(resampled_streamlines)
-    new_sft = StatefulTractogram(streamlines=new_streamlines, reference=change_to_trk(path), space=Space.RASMM)
+    new_sft = StatefulTractogram(streamlines=new_streamlines, reference=path, space=Space.RASMM)
     spaced_streamlines = new_sft.streamlines
     return spaced_streamlines
 
@@ -173,7 +174,6 @@ def deformation_feature_1(bundle,all_streamlines):
     # step 4: i take the min
     """
 
-
     skeleton_path = (
         PC_DIR
         / "training_script"
@@ -225,7 +225,6 @@ def deformation_feature_2(all_streamlines, tumor_center, all_streams_tumor_point
     return all_streams
 
 def deformation_feature_3(all_streamlines,all_streams_tumor_points):
-     
     all_streams = []
     for i,stream in enumerate(all_streamlines):
         P = stream[:-2]      # j-1
@@ -260,7 +259,7 @@ if __name__ == '__main__':
 
     MNT_DIR = Path("/home/thuythienthanh.tran/mnt")
 
-    # Your PC, mounted with SSHFS
+    # PC dir, mounted with SSHFS
     PC_DIR = MNT_DIR / "pc"
 
     # nilab-nexus, mounted with SSHFS
@@ -269,14 +268,16 @@ if __name__ == '__main__':
     # Large GLIODEF dataset lives on nilab-nexus
     data_dir = NILAB_DIR / "datasets" / "GLIODEF"
 
-    # Bundle index JSONs are on your PC
+    # Bundle index JSONs are on PC
     output_dir = PC_DIR / "output"
 
-    # Generated feature files should go to nilab-nexus
-    feature_output_dir = NILAB_DIR / "gliodef_script" / "output" / "features"
+    # Generated feature files should go to pc
+    feature_output_dir = output_dir / "features"
 
     with (output_dir / f"bundle_idx_{bundle}.json").open("r") as f:
         bundle_idx = json.load(f)
+    bundle_idx = irbio_path(bundle_idx, bundle)
+
     subjects = {
         s['path']: {
             "hard_neg_indices": s['hard_neg_indices'],
@@ -311,7 +312,7 @@ if __name__ == '__main__':
     len_pos = len(subjects[path]['positive_indices'])
 
     streamlines = load_streamlines(change_to_trk(path), idxs=indices, container='array')
-    streamlines = spacing(path, streamlines, target_spacing_mm=5)
+    streamlines = spacing(change_to_trk(path), streamlines, target_spacing_mm=5)
 
     all_streams_tumor_points = ray_intersections_all_streamlines(streamlines, tumor_center, lesion_img, step_mm=0.1)
     sub_df1 = deformation_feature_1(bundle, streamlines)
