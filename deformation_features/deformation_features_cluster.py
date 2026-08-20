@@ -28,7 +28,6 @@ def ray_intersections_all_streamlines(
 ):
     """
     Find tumor-surface intersection T for every point of every streamline.
-
     Parameters
     ----------
     streamlines : iterable
@@ -55,33 +54,23 @@ def ray_intersections_all_streamlines(
 
     for stream in streamlines:
         stream = np.asarray(stream, dtype=float)
-
         # C -> P direction for every point on this streamline
         directions = stream - C                         # (n_points, 3)
         distances = np.linalg.norm(directions, axis=1) # (n_points,)
-
         # unit directions
         unit_dirs = directions / distances[:, None]
-
         # initially all rays start at tumor center
         T = np.repeat(C[None, :], len(stream), axis=0)
-
         # rays still being followed
         active = np.ones(len(stream), dtype=bool)
-
         t = 0.0
-
         while np.any(active):
             t += step_mm
-
             # points at distance t along every active ray
             points_mm = C + t * unit_dirs[active]
-
             # RASMM -> lesion voxel coordinates
             points_vox = nib.affines.apply_affine(inv_affine, points_mm)
-
             idx = np.round(points_vox).astype(int)
-
             # check whether voxel index is inside image
             inside_bounds = np.all((idx >= 0) & (idx < np.array(mask.shape)), axis=1)
             inside_tumor = np.zeros(len(idx), dtype=bool)
@@ -91,7 +80,6 @@ def ray_intersections_all_streamlines(
                 valid_idx[:, 1],
                 valid_idx[:, 2]
             ]
-
             active_indices = np.where(active)[0]
             # rays that are still inside tumor:
             # save current position as latest valid surface candidate
@@ -171,8 +159,6 @@ def deformation_feature_1(bundle,all_streamlines):
               i compute euclidean distance of on that point to all the points on the skeleton
     # step 4: i take the min
     """
-
-
     skeleton_path = (
         PC_DIR
         / "training_script"
@@ -220,7 +206,6 @@ def deformation_feature_2(all_streamlines, tumor_center, all_streams_tumor_point
         tumor_distance = np.linalg.norm(tumor_center - stream, axis=1)
         ratio = tumor_size / tumor_distance
         all_streams.append(ratio[1:-1])
-    
     return all_streams
 
 def deformation_feature_3(all_streamlines,all_streams_tumor_points):
@@ -259,19 +244,16 @@ if __name__ == '__main__':
 
     MNT_DIR = Path("/home/thuythienthanh.tran/mnt")
 
-    # Your PC, mounted with SSHFS
+    # PC, mounted with SSHFS
     PC_DIR = MNT_DIR / "pc"
-
     # nilab-nexus, mounted with SSHFS
     NILAB_DIR = MNT_DIR / "mount_point"
-
     # Large GLIODEF dataset lives on nilab-nexus
     data_dir = NILAB_DIR / "datasets" / "GLIODEF"
-
-    # Bundle index JSONs are on your PC
+    # Bundle index JSONs are on PC
     output_dir = PC_DIR / "output"
 
-    # Generated feature files should go to nilab-nexus
+    # Generated feature files 
     feature_output_dir = output_dir / "features"
 
     with (output_dir / f"bundle_idx_{bundle}.json").open("r") as f:
