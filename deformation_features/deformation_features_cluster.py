@@ -1,5 +1,6 @@
 """
-today i do everything in rasmm
+to run on the cluster, each job is a combination of sub_id x tum_id x bundle
+
 """
 import numpy as np
 import re
