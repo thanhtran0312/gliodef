@@ -276,7 +276,7 @@ if __name__ == '__main__':
 
     with (output_dir / f"bundle_idx_{bundle}.json").open("r") as f:
         bundle_idx = json.load(f)
-    bundle_idx = irbio_path(bundle_idx)
+    bundle_idx = irbio_path(bundle_idx,bundle)
 
     subjects = {
         s['path']: {
