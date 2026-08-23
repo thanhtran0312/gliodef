@@ -1,32 +1,71 @@
+"""
+This script loads a full list of subject ids and tumor ids.
+Split each into 5 folds
+Save the folds
+
+to run: 
+bundles=(AF_L FAT_L IFOF_L ILF_L PYT_L)
+for bundle in "${bundles[@]}"; do     python -m training_script.preprocessing.split_kfolds --bundle "$bundle" & done
+"""
+
 import json
 import os
 import re
+import argparse
+import pandas as pd
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import sys
-home_path=os.environ["HOME"]
-sys.path.append(home_path,'/balance\n dataset')
-from balance_40_30_30 import count_streamlines
+
+def count_streamlines(path, bundle):
+    """args
+    inputs: 
+        bundles
+        paths of subjects that are relevant to each bundle
+
+    outputs:
+        how many negative, positive streamlines that belong to relevant bundles of each subject 
+        indices of those streamlines
+    """
+    print('started counting')
+    df = pd.read_csv(path,usecols=[bundle])
+    positive_streamlines_all_bundles = {}
+    negative_streamlines_all_bundles = {}
+    positive_indices_pool = {}
+    negative_indices_pool = {}
+
+    positive_streamlines = df[bundle].sum() # a scalar
+    negative_streamlines = len(df[bundle]) - df[bundle].sum() # a scalar
+    positive_streamlines_all_bundles[bundle] = positive_streamlines
+    negative_streamlines_all_bundles[bundle] = negative_streamlines
+    positive_indices_pool[bundle] = np.where(df[bundle]==True)[0]
+    negative_indices_pool[bundle] = np.where(df[bundle]==False)[0]
+    print('counted')
+
+    return positive_streamlines_all_bundles, negative_streamlines_all_bundles, positive_indices_pool, negative_indices_pool
 
 # load subjects
 data_dir = '/nilab-nexus/datasets/GLIODEF'
 script_dir = '/home/thanh/gliodef_script'
-output_dir = '/home/thanh/output'
+output_dir = os.path.join(script_dir,"output")
 
-with open(os.path.join(output_dir,'bundle_idx.json'),'r') as file:
+parser = argparse.ArgumentParser()
+parser.add_argument("--bundle", required=True, help="e.g. AF_L")
+args = parser.parse_args()
+bundle = args.bundle
+with open(os.path.join(output_dir,f'bundle_idx_{bundle}.json'),'r') as file:
     bundle_idx = json.load(file)
 
 # positive streamlines per pair sub x tumor for AFL
-paths = [bundle_idx['AF_L'][sub]['path'] for sub in range(len(bundle_idx['AF_L']))]
+paths = [bundle_idx[bundle][sub]['path'] for sub in range(len(bundle_idx[bundle]))]
 positive_streamlines = {path: None for path in paths}
 
-with ProcessPoolExecutor(max_workers=os.cpu_count()) as ex:
-    futures = {ex.submit(count_streamlines,path,bundle='AF_L'): path for path in paths}
+with ProcessPoolExecutor(max_workers=10) as ex:
+    futures = {ex.submit(count_streamlines,path,bundle=bundle): path for path in paths}
 
     for fut in as_completed(futures):
         path = futures[fut]
         positive, *_ = fut.result() 
-        positive_streamlines[path] = int(positive['AF_L'])
+        positive_streamlines[path] = int(positive[bundle])
 
 
 # get tum_ids & sub_ids of warped subjects who passed the threshold
@@ -40,7 +79,7 @@ sub_ids = np.unique(sub)
 tum_ids = np.unique(tum)
 
 
-## create a dict where key being tum_id and 
+## create a dict wher"""  """ """e key being tum_id and 
 # values are another dict with key being path/sub & value being positive streams of that sub
 tums = {tum:{} for tum in tum_ids}
 
@@ -80,8 +119,8 @@ for bin in severity_bins:
 shuffled_subs = np.random.permutation(sub_ids)
 cv_folds_sub = [list(f) for f in np.array_split(shuffled_subs, n_folds)]
 
-with open(os.path.join(output_dir,"cv_folds_sub.json"),"w") as f:
+with open(os.path.join(output_dir,f"cv_folds_sub_{bundle}.json"),"w") as f:
     json.dump(cv_folds_sub,f,indent=2)
 
-with open(os.path.join(output_dir,"cv_folds_tum.json"),"w") as f:
+with open(os.path.join(output_dir,f"cv_folds_tum_{bundle}.json"),"w") as f:
     json.dump(cv_folds_tum,f,indent=2)
