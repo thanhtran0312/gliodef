@@ -81,7 +81,7 @@ class RndSampling(object):
             chosen_idx = np.random.choice(range(n), self.output_size)
 
         out_gt = gt[chosen_idx] if isinstance(gt, (list, np.ndarray)) and len(gt) > 1 else gt
-        return {'points': pts[chosen_idx], 'gt': out_gt}
+        return {'points': pts[chosen_idx],'chosen_idx':chosen_idx,'gt': out_gt}
 
 
 class FixedRndSampling(object):
