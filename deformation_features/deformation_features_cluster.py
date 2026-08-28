@@ -1,329 +1,337 @@
-"""
-to run on the cluster, each job is a combination of sub_id x tum_id x bundle
+# to train a neural network, i need
+    # (1) data preparation/loading
+    # (2) neural network construction - verifyber here with its architecture and forward pass
+    # (3) loss function
+    # (4) maybe optimizer?
 
-"""
+    # (5) the algorithm - for testing loop
+                        # iterate over a given set of data
+                        # forward the data through the neural network
+                        # compare the network output with the ground truth labels to compute the loss/evaluation metrics
+                        
+                        # for training loop is above +
+                        # perform the backward pass to compute gradients
+                        # call the optimizer to consequently update the weights optimizer.step()
+                        # reset gradients to not accumulate them optimizer.zero_grad()
 
-import numpy as np
-import re
-import json
-import pickle
+    # (6) logging
 
-from pathlib import Path
+import sys
 import argparse
-import sklearn
-import nibabel as nib
-from scipy.ndimage import binary_erosion
-from scipy.spatial import KDTree
+import json
+import torch
+import time
+import numpy as np
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - for Python < 3.11
+    import tomli as tomllib
+from pathlib import Path
+from torch_geometric.loader import DataLoader as gDataLoader
+import torch.nn.functional as F
 
-from dipy.tracking.streamline import set_number_of_points
-from dipy.tracking.streamlinespeed import length
-from dipy.io.stateful_tractogram import StatefulTractogram, Space
-from nibabel.streamlines.array_sequence import ArraySequence
-from training_script.utils.utils import load_streamlines, change_to_trk, irbio_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # -> root/src
+from training_script.data.dataset_features import GlioDefDataset
+from training_script.utils.transforms import RndSampling
+from training_script.models.verifyber import DECSeq
+from training_script.utils.transforms import RndSampling
+from training_script.utils.train_utils import (
+    create_tb_logger,
+    dump_code,
+    dump_model,
+    get_lr,
+    get_lr_scheduler,
+    initialize_loss_dict,
+    log_losses,
+    update_bn_decay,
+)
+from training_script.utils.utils import (
+    digis_path,
+    initialize_metrics,
+    log_avg_metrics,
+    update_metrics,
+    get_metrics_inline,
+)
+
+def train_epoch(cfg, loader, model, optimizer, writer, epoch, n_iter):
+        """run one epoch of training
+        """
+        model.train()
+        num_classes = int(cfg["n_classes"])
+        num_batch = cfg["num_batch"]
+        ep_loss = 0.0
+        # ep_loss_dict = initialize_loss_dict(cfg)
+        metrics = initialize_metrics()
+        end = time.time()
+        t0 = time.time()
+        for i_batch, sample_batched in enumerate(loader):
+            load_time = time.time() - end
+            data = sample_batched
+            target = data.y   # ground truth
+            t = time.time()
+            data,target = data.to("cuda",non_blocking=True), target.to("cuda",non_blocking=True)
+            torch.cuda.synchronize()
+            transfer_time = time.time() - t
+            if not cfg["accumulation_interval"] or i_batch == 0:
+                optimizer.zero_grad()
+            
+            # forward
+            t = time.time()
+            logits = model(data)
+            torch.cuda.synchronize()
+            forward_time = time.time() - t
+            # loss
+            criterion = torch.nn.NLLLoss()
+            pred =  F.log_softmax(logits, dim=-1)
+            loss = criterion(pred, target)
+            ep_loss += loss.item()
+            # running_ep_loss = ep_loss / (i_batch + 1)
+            t = time.time()
+            loss.backward()
+
+            # if (i_batch + 1) % int(cfg["accumulation_interval"]) == 0:
+            #     optimizer.step()
+            #     optimizer.zero_grad()
+            # elif not cfg["accumulation_interval"]:
+            #     optimizer.step()
+
+            optimizer.step()
+            optimizer.zero_grad()
+            torch.cuda.synchronize()
+            backward_time = time.time() - t
+            print(
+                f"batch {i_batch}: "
+                f"load={load_time:.2f}s, "
+                f"transfer={transfer_time:.2f}s, "
+                f"forward={forward_time:.2f}s, "
+                f"backward={backward_time:.2f}s, "
+                f"points={data.x.shape[0]}, "
+                f"edges={data.edge_index.shape[1]}")
+            end = time.time()	
+            # print which batch and how long did it take
+            if i_batch % 10 == 0:
+                elapsed = time.time() - t0
+                per_batch = elapsed / 10 if i_batch > 0 else elapsed
+                print(f'  batch {i_batch}/{len(loader)}: loss {loss.item():.4f}  ({per_batch:.2f}s/batch)')
+                t1 = time.time()
+                print(f'{t1}-{t0}s')
+
+            # compute performance
+            if cfg['task'] == 'classification':
+                pred =  F.log_softmax(logits, dim=-1).view(-1, num_classes)
+                pred_choice = pred.data.max(1)[1].int()
+                update_metrics(metrics, pred_choice, target, task=cfg["task"])
+                print(
+                    "[%d: %d/%d] train loss: %f %s"
+                    % (
+                        epoch,
+                        i_batch,
+                        num_batch,
+                        loss.item(),
+                        get_metrics_inline(metrics, "last"),
+                    )
+                )
+            else:
+                update_metrics(metrics, logits.float(), target.float(), task=cfg["task"])
+                print(
+                    "[%d: %d/%d] train loss: %f %s"
+                    % (
+                        epoch,
+                        i_batch,
+                        num_batch,
+                        loss.item(),
+                        get_metrics_inline(metrics, "last"),
+                    )
+                )
+            n_iter += 1
+        ep_loss = ep_loss / (i_batch + 1)
+        writer.add_scalar("train/epoch_loss", ep_loss, epoch)
+        # log_losses(ep_loss_dict, writer, epoch, i_batch + 1)
+        log_avg_metrics(writer, metrics, "train", epoch)
+        return ep_loss, n_iter
+
+def validate_epoch(cfg, loader, model, writer, epoch, best_epoch, best_score):
+    best = False
+    num_classes = int(cfg['n_classes'])
+    model.eval()
+    with torch.no_grad():
+        metrics_val = initialize_metrics()
+        ep_loss = 0.0
+        for i,sample in enumerate(loader):
+            data = sample
+            target = data['y']
+            data,target = data.to("cuda"), target.to("cuda")
+
+            log_str = "VALIDATION [%d: %d/%d] " % (epoch, i, len(loader))
+            logits = model(data)
+
+            criterion = torch.nn.NLLLoss()
+            pred = F.log_softmax(logits,dim=-1)
+            loss = criterion(pred,target)
+            ep_loss += loss.item()
+
+            if cfg['task'] == 'classification':
+
+                ref_metrics = "acc"
+                pred = F.log_softmax(logits, dim=-1).view(-1, num_classes)
+                pred_choice = pred.data.max(1)[1].int()
+                update_metrics(metrics_val, pred_choice, target, task=cfg["task"])
+                print(
+                        "val min / max class pred %d / %d"
+                        % (pred_choice.min().item(), pred_choice.max().item())
+                    )
+                print("# class pred ", len(torch.unique(pred_choice)))
+                    # writer.add_scalar('val/loss', ep_loss / i, epoch)
+            else:
+                ref_metrics = "mse"
+                update_metrics(
+                        metrics_val, logits.float(), target.float(), task=cfg["task"]
+                    )
+        log_str += "loss: %.4f " % loss.item()
+        log_str += get_metrics_inline(metrics_val, type="last")
+        print(log_str)
+    val_loss = ep_loss/len(loader)
+    writer.add_scalar("val/epoch_loss",val_loss,epoch) 
+    log_avg_metrics(writer, metrics_val, "val", epoch)
+    epoch_score = torch.tensor(metrics_val[ref_metrics]).mean().item()
+    print("VALIDATION AVG: %s" % get_metrics_inline(metrics_val, "avg"))
+    print("VALIDATION LOSS:", val_loss)
+    print("\n\n")
+
+    if ref_metrics == "acc" and epoch_score > best_score:
+            best_score = epoch_score
+            best_epoch = epoch
+            best = True
+    elif ref_metrics == "mse" and epoch_score < best_score:
+            best_score = epoch_score
+            best_epoch = epoch
+            best = True
+
+    if cfg["save_model"]:
+            dump_model(cfg, model, writer.log_dir, epoch, epoch_score, best=best)
+
+    return best_epoch, best_score
+
+def train(cfg, bundle_idx, training_data,testing_data,deformation_features_training,deformation_features_testing):
+    batch_size = int(cfg["batch_size"])
+    n_epochs = int(cfg["n_epochs"])
+    sample_size = int(cfg["fixed_size"])
 
 
-def ray_intersections_all_streamlines(
-    streamlines,
-    tumor_center_mm,
-    lesion_img,
-    step_mm=0.1
-):
-    """
-    Find tumor-surface intersection T for every point of every streamline.
+    train_dataset = GlioDefDataset(training_data, bundle_idx=bundle_idx,deformation_features=deformation_features_training,
+                                transform=RndSampling(sample_size, maintain_prop=False),
+                                return_edges=True, with_gt=True, permute=True, permute_type='flip')
+    val_dataset = GlioDefDataset(testing_data, bundle_idx=bundle_idx,deformation_features=deformation_features_testing,
+                              transform=RndSampling(sample_size, maintain_prop=False), return_edges=True,
+                              with_gt=True, permute=True, permute_type='flip')
 
-    Parameters
-    ----------
-    streamlines : iterable
-        Each streamline has shape (n_points, 3), in RASMM / MNI mm.
-    tumor_center_mm : array-like, shape (3,)
-        Tumor center in RASMM / MNI mm.
-    lesion_img : nibabel Nifti1Image
-        Binary lesion mask.
-    step_mm : float
-        Step size along each C -> P ray, in mm.
 
-    Returns
-    -------
-    all_tumor_points : list of arrays
-        One array per streamline, shape (n_points, 3).
-        Each row is the tumor-surface point corresponding to that
-        streamline point, in RASMM / MNI mm.
-    """
+    train_loader = gDataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True,pin_memory=False,num_workers=0)
+    val_loader = gDataLoader(val_dataset, batch_size=cfg['batch_size'], shuffle=False,pin_memory=False,num_workers=0)
 
-    mask = lesion_img.get_fdata() > 0
-    inv_affine = np.linalg.inv(lesion_img.affine)
-    C = np.asarray(tumor_center_mm, dtype=float)
-    all_tumor_points = []
+    writer = create_tb_logger(cfg)
+    dump_code(cfg, writer.log_dir)
 
-    for stream in streamlines:
-        stream = np.asarray(stream, dtype=float)
-
-        # C -> P direction for every point on this streamline
-        directions = stream - C                         # (n_points, 3)
-        distances = np.linalg.norm(directions, axis=1) # (n_points,)
-
-        # unit directions
-        unit_dirs = directions / distances[:, None]
-
-        # initially all rays start at tumor center
-        T = np.repeat(C[None, :], len(stream), axis=0)
-
-        # rays still being followed
-        active = np.ones(len(stream), dtype=bool)
-
-        t = 0.0
-
-        while np.any(active):
-            t += step_mm
-
-            # points at distance t along every active ray
-            points_mm = C + t * unit_dirs[active]
-
-            # RASMM -> lesion voxel coordinates
-            points_vox = nib.affines.apply_affine(inv_affine, points_mm)
-
-            idx = np.round(points_vox).astype(int)
-
-            # check whether voxel index is inside image
-            inside_bounds = np.all((idx >= 0) & (idx < np.array(mask.shape)), axis=1)
-            inside_tumor = np.zeros(len(idx), dtype=bool)
-            valid_idx = idx[inside_bounds]
-            inside_tumor[inside_bounds] = mask[
-                valid_idx[:, 0],
-                valid_idx[:, 1],
-                valid_idx[:, 2]
-            ]
-
-            active_indices = np.where(active)[0]
-            # rays that are still inside tumor:
-            # save current position as latest valid surface candidate
-            still_inside = active_indices[inside_tumor]
-            T[still_inside] = points_mm[inside_tumor]
-            # rays that have exited tumor are finished
-            exited = active_indices[~inside_tumor]
-            active[exited] = False
-        all_tumor_points.append(T)
-    return all_tumor_points
-
-def spacing(path, streamlines, target_spacing_mm=1):
-    """ for all streamlines from indices given of one tractogram, this function do 2 things
-    (1) enforce equal space spacing 
-    (2) convert to voxel space 
+    model = DECSeq(input_size=3, n_classes=cfg['n_classes']).to('cuda')
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg['learning_rate'],weight_decay=float(cfg['weight_decay']))
+    lr_scheduler = get_lr_scheduler(cfg, optimizer)
+    num_batch = len(train_dataset) / batch_size
+    print("num of batches per epoch: %d" % num_batch)
+    cfg["num_batch"] = num_batch
     
-    args: streamlines' coords, spacing value
-    """
-    resampled_streamlines = []
-    for sl in streamlines:
-        total_len_mm = length(sl)
-        n_points =  int(round(total_len_mm / target_spacing_mm)) + 1
-        resampled_streamlines.append(set_number_of_points(sl, n_points))
-    new_streamlines = ArraySequence(resampled_streamlines)
-    new_sft = StatefulTractogram(streamlines=new_streamlines, reference=path, space=Space.RASMM)
-    spaced_streamlines = new_sft.streamlines
-    return spaced_streamlines
-
-def class_query(all_streamlines,kdt_skeleton):   
-        """class here can be hard/soft neg or pos"""    
-        # shape (streams x points x 3), but space should be 2d for kdtree.query()
-        # list of number of points of each streamline
-        n_points_each_stream = [s.shape[0] for s in all_streamlines]
-        flattened_query = np.concatenate(all_streamlines, axis=0) 
-        dist, idx = kdt_skeleton.query(flattened_query, k=1, workers=-1)
-        ## split back per streamline
-        splits = np.cumsum(n_points_each_stream)[:-1]
-        dist_per_streamline = np.split(dist, splits)
-        dist_per_streamline_internal_points = [d[1:-1] for d in dist_per_streamline]
-        # pair = [{indices[i]: dist_per_streamline_internal_points[i]} for i in range(len(indices))]
-        return dist_per_streamline_internal_points
-
-def get_center_of_mass(path_nii):
-    img = nib.load(path_nii)
-    mask = img.get_fdata() > 0
-
-    coords = np.argwhere(mask) # gives all voxel coords that belong to the tumor
-    center_vox = coords.mean(axis=0) # take the mean coord across all tumor voxels
-
-    center_rasmm = nib.affines.apply_affine(img.affine, center_vox)
-    return center_rasmm
-
-def get_border_points(path_nii):
-    img = nib.load(path_nii)
-    mask = img.get_fdata() > 0    # the whole mask - 3d boolean array - 
-    # cell value is true/false whether voxel at that index belongs to the lesion or not
-
-    eroded = binary_erosion(mask) # the interior -  3d boolean array
-    border = mask & ~eroded       # = the whole mask - the interior - 3d boolean array
-
-    border_points = np.argwhere(border) # n points x 3d coords
-    border_rasmm = nib.affines.apply_affine(img.affine, border_points)
-    return border_rasmm
-
-def deformation_feature_1(bundle,all_streamlines):
-    """
-    this function runs for one subject relative to one bundle at a time.
-
-    args: 
-            streamlines of the bundle
-            centroid tractogram
-    output: 
-
-    # step 1: get the skeleton of the bundle - 1mm spaced
-    # step 2: for the bundle, load subjects' relevant streamlines - 5mm spaced
-    # step 3: for each internal point of each streamline,
-              i compute euclidean distance of on that point to all the points on the skeleton
-    # step 4: i take the min
-    """
-
-    skeleton_path = (
-        PC_DIR
-        / "training_script"
-        / "deformation_features"
-        / "original_MNIatlas_space_5bdl"
-        / "centroids"
-        / f"{bundle}_centroid.trk")
-    skeleton_streamlines = load_streamlines(skeleton_path,container='array')
-    bundle_skeleton = spacing(path=skeleton_path,streamlines=skeleton_streamlines,target_spacing_mm=1) # return Array Sequence len of 1
-    search_space = np.array(bundle_skeleton[0])
-    kdt_skeleton = KDTree(search_space)
-    """here i query all streamlines together instead of one streamline at a time like the old script"""
-        # shape (n_streams, n_points) , value for each cell is "smallest_distance"
-        # for each stream, it returns a list of distance for all points of that stream to the closest skeleton point 
-    dist_per_streamline = class_query(all_streamlines,kdt_skeleton)
-    return dist_per_streamline
-
-def deformation_feature_2(all_streamlines, tumor_center, all_streams_tumor_points):
-    """
-    output: CT/CX
-            C: center of the tumor
-            X: one point on the streamline
-            CX: ray from tumor center to the point on the the streamline
-            T: where CX crosses the tumor
-            CT: tumor size on the direction of CX
-
-    algorithm:
-            step 1: find where the tumor boundary is in the direction of X, where CX cut the tumor boundary is T
-            step 2: compute the ratio
-
-    input:
-            tumor center
-            tumor border points
-            streamline points
-    """
-    all_streams = []
-    for i,stream in enumerate(all_streamlines):
-        # # cosine between streamline point i direction and border point j direction 
-        # # so row is all tumor points for one point on the sreamline (n_stream_points, n_border_points)
-        # cos_sim = sklearn.metrics.pairwise.cosine_similarity(stream,tumor_border_points)
-        # # tumor points for all points on this stream, shape = n_points on the stream
-        # tumor_points = tumor_border_points[np.argmax(cos_sim,axis=1)]
-        tumor_points = all_streams_tumor_points[i]
-        tumor_size = np.linalg.norm(tumor_center - tumor_points, axis=1)
-        tumor_distance = np.linalg.norm(tumor_center - stream, axis=1)
-        ratio = tumor_size / tumor_distance
-        all_streams.append(ratio[1:-1])
+    n_iter = 0
+    if cfg["task"] == "classification":
+        best_pred = 0
+    else:
+        best_pred = np.inf
+    best_epoch = 0
+    current_lr = float(cfg["learning_rate"])
+    initial_nll_w = cfg["nll_w"]
     
-    return all_streams
+    for epoch in range(n_epochs + 1):
 
-def deformation_feature_3(all_streamlines,all_streams_tumor_points):
-    all_streams = []
-    for i,stream in enumerate(all_streamlines):
-        P = stream[:-2]      # j-1
-        Q = stream[1:-1]     # j
-        S = stream[2:]       # j+1        
-        Pt = all_streams_tumor_points[i][:-2]
-        Qt = all_streams_tumor_points[i][1:-1]     
-        St = all_streams_tumor_points[i][2:]
+        # update bn decay
+        if cfg["bn_decay"] and epoch != 0 and epoch % int(cfg["bn_decay_step"]) == 0:
+            update_bn_decay(cfg, model, epoch)
 
-        # alpha
-        PQ = P - Q
-        SQ = S - Q
-        cos_alpha = np.diagonal(sklearn.metrics.pairwise.cosine_similarity(PQ,SQ))
-        alpha = np.arccos(np.clip(cos_alpha, -1, 1))
+        if cfg["nll_w_decay"] and epoch % int(cfg["nll_w_decay_step"]) == 0:
+            cfg["nll_w"][0] = initial_nll_w[0] * cfg["nll_w_decay"] ** epoch
 
-        PtQt = Pt - Qt
-        StQt = St - Qt
-        cos_beta = np.diagonal(sklearn.metrics.pairwise.cosine_similarity(PtQt,StQt))
-        beta = np.arccos(np.clip(cos_beta, -1, 1))
-        df3 = alpha - beta
-        all_streams.append(df3)
-    return all_streams
+        loss, n_iter = train_epoch(
+            cfg, train_loader, model, optimizer, writer, epoch, n_iter
+        )
 
-     
+        ### validation during training
+        if epoch % int(cfg["val_freq"]) == 0 and cfg["val_in_train"]:
+            best_epoch, best_pred = validate_epoch(
+                cfg, val_loader, model, writer, epoch, best_epoch, best_pred
+            )
+
+        # update lr
+        if cfg["lr_type"] == "step" and current_lr >= float(cfg["min_lr"]):
+            lr_scheduler.step()
+        if cfg["lr_type"] == "plateau":
+            lr_scheduler.step(loss)
+
+        current_lr = get_lr(optimizer)
+        writer.add_scalar("train/lr", current_lr, epoch)
+    writer.close()
+
 if __name__ == '__main__':
+    # paths
+    script_dir = Path(__file__).resolve().parent
+    project_root = script_dir.parents[2]      # root/
+    src_dir      = script_dir.parents[1]      # root/src/
+    data_dir   = script_dir.parents[4] / "nilab-nexus/datasets/GLIODEF"
+
+    df_dir = project_root / "deformation_features"
+    output_dir = src_dir / "output"
+    config_file = script_dir / "config_features.toml"   # same dir as train.py
+    #args
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", required=True, help="e.g. AF_L")
-    parser.add_argument("--sub", required=True)
-    parser.add_argument("--tum", required=True)
-    args = parser.parse_args()
-    bundle, sub, tum = args.bundle, args.sub, args.tum
+    args = parser.parse_args() 
 
-    MNT_DIR = Path("/home/thuythienthanh.tran/mnt")
-
-    # PC dir, mounted with SSHFS
-    PC_DIR = MNT_DIR / "pc"
-
-    # nilab-nexus, mounted with SSHFS
-    NILAB_DIR = MNT_DIR / "mount_point"
-
-    # Large GLIODEF dataset lives on nilab-nexus
-    data_dir = NILAB_DIR / "datasets" / "GLIODEF"
-
-    # Bundle index JSONs are on PC
-    output_dir = PC_DIR / "output"
-
-    # Generated feature files should go to pc
-    feature_output_dir = output_dir / "features"
-
-    with (output_dir / f"bundle_idx_{bundle}.json").open("r") as f:
+    with (output_dir / f"bundle_idx_{args.bundle}.json").open("r") as f:
         bundle_idx = json.load(f)
-    bundle_idx = irbio_path(bundle_idx, bundle)
+    with (output_dir / f"cv_folds_tum_{args.bundle}.json").open("r") as f:
+        cv_folds_tum = json.load(f)
+    with (output_dir / f"cv_folds_sub_{args.bundle}.json").open("r") as f:
+        cv_folds_sub = json.load(f)
 
-    subjects = {
-        s['path']: {
-            "hard_neg_indices": s['hard_neg_indices'],
-            "soft_neg_indices": s['soft_neg_indices'],
-            "positive_indices": s['positive_indices']}
-        for s in bundle_idx[bundle]}
+    with config_file.open("rb") as fid:
+        cfg = tomllib.load(fid)["DEFAULT"]
 
-    path = str(
-        data_dir
-        / f"sub-{sub}"
-        / "tractography"
-        / f"sub-{sub}_tum-{tum}_bundle.csv"
-    )
-    out_dir = feature_output_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"sub-{sub}_tum-{tum}_{bundle}.pkl"
+    cfg["bundle"] = args.bundle
+    cfg["experiment_name"] = f"{cfg['experiment_name']}_{args.bundle}"
 
-    if out_path.exists():
-        print(f"Skipped, already computed: {out_path}")
-        exit()
-    if path not in subjects:
-        print(f"{path} not in bundle {bundle} pool, skipping.")
-        exit()
+    subjects_pool = [(bundle_idx[args.bundle][j]['path']) for j in range(len(bundle_idx[args.bundle ]))]    
+    for i in range(cfg["folds"]):
+        testing_data = []
+        deformation_features_testing = []
 
-    path_nii = data_dir / "sub-MNI" / "lesion" / f"sub-MNI_tum-{tum}_lesion.nii.gz"
-    lesion_img = nib.load(path_nii)
-    tumor_center = get_center_of_mass(path_nii)
+        testing_tum = cv_folds_tum[i]
+        testing_sub = cv_folds_sub[i]
 
-    indices = subjects[path]['hard_neg_indices'] + subjects[path]['soft_neg_indices'] + subjects[path]['positive_indices']
-    len_hard = len(subjects[path]['hard_neg_indices'])
-    len_soft = len(subjects[path]['soft_neg_indices'])
-    len_pos = len(subjects[path]['positive_indices'])
+        training_data = []
+        deformation_features_training = []
+        training_sub = [s for j, fold in enumerate(cv_folds_sub) if i != j for s in fold]
+        training_tum = [t for j, fold in enumerate(cv_folds_tum) if i != j for t in fold]   
+        for sub in training_sub:
+            for tum in training_tum:
+                path_coords = str(data_dir / f"sub-{sub}" / "tractography" / f"sub-{sub}_tum-{tum}_bundle.csv")
+                path_df = str(df_dir/f"sub-{sub}_tum-{tum}_{args.bundle}.pkl")
+                if path_coords in subjects_pool:
+                    training_data.append(path_coords)
+                    deformation_features_training.append(path_df)
 
-    streamlines = load_streamlines(change_to_trk(path), idxs=indices, container='array')
-    streamlines = spacing(change_to_trk(path), streamlines, target_spacing_mm=5)
-
-    all_streams_tumor_points = ray_intersections_all_streamlines(streamlines, tumor_center, lesion_img, step_mm=0.1)
-    sub_df1 = deformation_feature_1(bundle, streamlines)
-    sub_df2 = deformation_feature_2(streamlines, tumor_center, all_streams_tumor_points)
-    sub_df3 = deformation_feature_3(streamlines, all_streams_tumor_points)
-
-    sub_df = {
-        'hard_neg_features': [np.stack([a, b, c], axis=1) for a, b, c in zip(sub_df1[:len_hard], sub_df2[:len_hard], sub_df3[:len_hard])],
-        'soft_neg_features': [np.stack([a, b, c], axis=1) for a, b, c in zip(sub_df1[:len_hard+len_soft], sub_df2[:len_hard+len_soft], sub_df3[:len_hard+len_soft])],
-        'positive_features': [np.stack([a, b, c], axis=1) for a, b, c in zip(sub_df1[:-len_pos], sub_df2[:-len_pos], sub_df3[:-len_pos])],
-    }
-    with open(out_path, "wb") as f:
-        pickle.dump(sub_df, f)
-    print(f"Saved: {out_path}")
+        for sub in testing_sub:
+            for tum in testing_tum:
+                path_coords = str(data_dir / f"sub-{sub}" / "tractography" / f"sub-{sub}_tum-{tum}_bundle.csv")
+                path_df = str(df_dir/f"sub-{sub}_tum-{tum}_{args.bundle}.pkl")
+                if path_coords in subjects_pool:
+                    testing_data.append(path_coords)
+                    deformation_features_testing.append(path_df)
+               
+        train(cfg, bundle_idx, training_data,testing_data,deformation_features_training,deformation_features_testing)
