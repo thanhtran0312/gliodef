@@ -77,7 +77,7 @@ class GlioDefDataset(gDataset):
         lengths = np.array([len(s) for s in streamlines])
         streams = np.concatenate(streamlines, axis=0)
         deformation_features, lens = self.load_deformation_features(idx, chosen_idx)
-        assert lengths.all() == lens.all()
+        assert np.array_equal(lengths, lens)
         ## it appends the reversed points of each streamline
         if self.permute:
             streams_perm = self.permute_pts(
@@ -88,13 +88,16 @@ class GlioDefDataset(gDataset):
             deformation_features = np.concatenate(df_perm, axis=0)
 
         # gt_tensor = torch.from_numpy(sample['gt']).long() if self.with_gt else None
-        sample['points'] = self.build_graph_sample(
-            streams=streams,
-            deformation_features=deformation_features,
-            lengths=lengths,
-            gt=sample.get("gt"))
-        del sample['gt']
-        return sample
+        # sample['points'] = self.build_graph_sample(
+        #     streams=streams,
+        #     deformation_features=deformation_features,
+        #     lengths=lengths,
+        #     gt=sample.get("gt"))
+        # del sample['gt']
+        # return sample
+        graph_sample = self.build_graph_sample(streams=streams,deformation_features=deformation_features,lengths=lengths,gt=sample.get("gt"))
+        return graph_sample
+    
     def load_deformation_features(self, idx, chosen_idx,):
             with open(self.deformation_feature_paths[idx], "rb") as file:
                 features = pickle.load(file)
@@ -142,6 +145,7 @@ class GlioDefDataset(gDataset):
         batch_slices = torch.cat([torch.tensor([0]), lengths.cumsum(dim=0)])
         slices = batch_slices[1:-1]
         streams = torch.from_numpy(streams)
+        deformation_features = torch.from_numpy(deformation_features).float()
         l = streams.shape[0]
         graph_sample = GlioDefData(x=deformation_features,
                      lengths=lengths,
