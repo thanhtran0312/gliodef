@@ -4,6 +4,7 @@ import torch
 from torch_geometric.data import Data as gData
 from torch_geometric.data import Dataset as gDataset
 from training_script.utils.utils import change_to_trk, load_streamlines
+from training_script.deformation_features.deformation_features import spacing
 
 class GlioDefData(gData):
     def __inc__(self, key, value, *args, **kwargs):
@@ -66,8 +67,17 @@ class GlioDefDataset(gDataset):
         # 1 trk/subject at a time; 
         # load_streamlines() returns all points of all streamlines of the subject concatenated
         # and lengths = number of points of each streamline
-        streams, lengths = load_streamlines(path_trk,sample['points'],container='array_flat')
-        deformation_features = self.load_deformation_features(idx, chosen_idx)
+        streamlines = load_streamlines(
+            path_trk,
+            sample['points'],
+            container='array')
+        lengths = np.array([len(s) for s in streamlines])
+        streamlines = spacing(path_trk,streamlines,target_spacing_mm=5)
+        streamlines = [str[1:-1] for str in streamlines]
+        lengths = np.array([len(s) for s in streamlines])
+        streams = np.concatenate(streamlines, axis=0)
+        deformation_features, lens = self.load_deformation_features(idx, chosen_idx)
+        assert lengths.all() == lens.all()
         ## it appends the reversed points of each streamline
         if self.permute:
             streams_perm = self.permute_pts(
@@ -85,13 +95,31 @@ class GlioDefDataset(gDataset):
             gt=sample.get("gt"))
         del sample['gt']
         return sample
-    def load_deformation_features(self, idx, chosen_idx):
-        path = self.deformation_feature_paths[idx]
+    def load_deformation_features(self, idx, chosen_idx,):
+            with open(self.deformation_feature_paths[idx], "rb") as file:
+                features = pickle.load(file)
 
-        with open(path, "rb") as f:
-            features = pickle.load(f)
+            all_features = []
+            all_features.extend(features["hard_neg_features"])
+            all_features.extend(features["soft_neg_features"])
+            all_features.extend(features["positive_features"])
 
-        return features[chosen_idx]
+            selected_features = [
+                all_features[int(i)]
+                for i in chosen_idx
+            ]
+
+            lengths = np.asarray(
+                [len(feature) for feature in selected_features],
+                dtype=np.int32,
+            )
+
+            flat_features = np.concatenate(
+                selected_features,
+                axis=0,
+            )
+
+            return flat_features, lengths
     ## it doesn't make the model invariant, but it changes the training data
     ## data augmentation function, training with data with random flips teaches
     ## the model that direction shouldn't matter for the label (because flipped or not, it has the same gt)
