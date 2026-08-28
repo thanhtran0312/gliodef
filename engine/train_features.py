@@ -67,7 +67,7 @@ def train_epoch(cfg, loader, model, optimizer, writer, epoch, n_iter):
         t0 = time.time()
         for i_batch, sample_batched in enumerate(loader):
             load_time = time.time() - end
-            data = sample_batched['points']
+            data = sample_batched
             target = data.y   # ground truth
             t = time.time()
             data,target = data.to("cuda",non_blocking=True), target.to("cuda",non_blocking=True)
@@ -159,7 +159,7 @@ def validate_epoch(cfg, loader, model, writer, epoch, best_epoch, best_score):
         metrics_val = initialize_metrics()
         ep_loss = 0.0
         for i,sample in enumerate(loader):
-            data = sample['points']
+            data = sample
             target = data['y']
             data,target = data.to("cuda"), target.to("cuda")
 
@@ -227,8 +227,8 @@ def train(cfg, bundle_idx, training_data,testing_data,deformation_features_train
                               with_gt=True, permute=True, permute_type='flip')
 
 
-    train_loader = gDataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True,pin_memory=True,num_workers=8)
-    val_loader = gDataLoader(val_dataset, batch_size=cfg['batch_size'], shuffle=False,pin_memory=True,num_workers=8)
+    train_loader = gDataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True,pin_memory=False,num_workers=0)
+    val_loader = gDataLoader(val_dataset, batch_size=cfg['batch_size'], shuffle=False,pin_memory=False,num_workers=0)
 
     writer = create_tb_logger(cfg)
     dump_code(cfg, writer.log_dir)
@@ -283,7 +283,8 @@ if __name__ == '__main__':
     script_dir = Path(__file__).resolve().parent
     project_root = script_dir.parents[2]      # root/
     src_dir      = script_dir.parents[1]      # root/src/
-    data_dir   = project_root / "data"
+    data_dir   = script_dir.parents[4] / "nilab-nexus/datasets/GLIODEF"
+
     df_dir = project_root / "deformation_features"
     output_dir = src_dir / "output"
     config_file = script_dir / "config_features.toml"   # same dir as train.py
@@ -305,7 +306,6 @@ if __name__ == '__main__':
     cfg["bundle"] = args.bundle
     cfg["experiment_name"] = f"{cfg['experiment_name']}_{args.bundle}"
 
-    bundle_idx = digis_path(bundle_idx,args.bundle)
     subjects_pool = [(bundle_idx[args.bundle][j]['path']) for j in range(len(bundle_idx[args.bundle ]))]    
     for i in range(cfg["folds"]):
         testing_data = []
