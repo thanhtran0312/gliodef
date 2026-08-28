@@ -1,6 +1,4 @@
 #!/bin/bash
-
-bundles=("AF_L" "PYT_L" "ILF_L" "FAT_L" "IFOF_L")
 n_parallel=120
 
 PROJECT_DIR="/home/thuythienthanh.tran/mnt/pc"
