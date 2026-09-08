@@ -224,7 +224,7 @@ def deformation_feature_2(all_streamlines, tumor_center, all_streams_tumor_point
     
     return all_streams
 
-def deformation_feature_3(all_streamlines,all_streams_tumor_points):
+def deformation_feature_3(all_streamlines,all_streams_tumor_points, tumor_center):
     all_streams = []
     for i,stream in enumerate(all_streamlines):
         P = stream[:-2]      # j-1
@@ -240,11 +240,29 @@ def deformation_feature_3(all_streamlines,all_streams_tumor_points):
         cos_alpha = np.diagonal(sklearn.metrics.pairwise.cosine_similarity(PQ,SQ))
         alpha = np.arccos(np.clip(cos_alpha, -1, 1))
 
+        PS = S - P
+        same_PQ = np.all(np.isclose(Pt, Qt), axis=1)
+        same_QS = np.all(np.isclose(Qt, St), axis=1)
+        same_PS = np.all(np.isclose(Pt, St), axis=1)
+
+        degenerate = same_PQ | same_QS | same_PS
+        t = np.sum((Q - P) * PS, axis=1) / np.sum(PS * PS, axis=1)
+        Q_projected = P + t[:, None] * PS
+
+        dist_Q_center = np.linalg.norm(Q - tumor_center, axis=1)
+        dist_Qproj_center = np.linalg.norm(Q_projected - tumor_center, axis=1)
+
+        alpha_corrected = alpha.copy()
+
+        mask = dist_Q_center < dist_Qproj_center
+        alpha_corrected[mask] = 2 * np.pi - alpha[mask]
         PtQt = Pt - Qt
         StQt = St - Qt
         cos_beta = np.diagonal(sklearn.metrics.pairwise.cosine_similarity(PtQt,StQt))
         beta = np.arccos(np.clip(cos_beta, -1, 1))
-        df3 = alpha - beta
+        beta[degenerate] = 0
+        df3 = np.abs(alpha_corrected - beta)
+
         all_streams.append(df3)
     return all_streams
 
@@ -317,8 +335,16 @@ if __name__ == '__main__':
     all_streams_tumor_points = ray_intersections_all_streamlines(streamlines, tumor_center, lesion_img, step_mm=0.1)
     sub_df1 = deformation_feature_1(bundle, streamlines)
     sub_df2 = deformation_feature_2(streamlines, tumor_center, all_streams_tumor_points)
-    sub_df3 = deformation_feature_3(streamlines, all_streams_tumor_points)
+    sub_df3 = deformation_feature_3(streamlines, all_streams_tumor_points,tumor_center)
 
+    assert all(np.all(np.isfinite(x)) for x in sub_df1)
+    assert all(np.all(np.isfinite(x)) for x in sub_df2)
+    assert all(np.all(np.isfinite(x)) for x in sub_df3)
+
+    assert min(np.min(x) for x in sub_df1) >= 0
+    assert min(np.min(x) for x in sub_df2) >= 0
+    assert min(np.min(x) for x in sub_df3) >= 0
+    
     sub_df = {
         'hard_neg_features': [np.stack([a, b, c], axis=1) for a, b, c in zip(sub_df1[:len_hard], sub_df2[:len_hard], sub_df3[:len_hard])],
         'soft_neg_features': [np.stack([a, b, c], axis=1) for a, b, c in zip(sub_df1[len_hard:len_hard+len_soft], sub_df2[len_hard:len_hard+len_soft], sub_df3[len_hard:len_hard+len_soft])],
@@ -326,4 +352,4 @@ if __name__ == '__main__':
     }
     with open(out_path, "wb") as f:
         pickle.dump(sub_df, f)
-    print(f"Saved: {out_path}")
+    print(f"Saved: {out_path}")(gliodef_venv)
